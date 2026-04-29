@@ -29,9 +29,16 @@ def _setting(name: str) -> str | None:
 
 @lru_cache(maxsize=1)
 def get_supabase() -> Client:
-    url = _required_env("SUPABASE_URL")
+    url = _normalize_supabase_url(_required_env("SUPABASE_URL"))
     key = _setting("SUPABASE_SERVICE_ROLE_KEY") or _required_env("SUPABASE_ANON_KEY")
     return create_client(url, key)
+
+
+def _normalize_supabase_url(url: str) -> str:
+    url = url.strip().rstrip("/")
+    if url.endswith("/rest/v1"):
+        url = url[: -len("/rest/v1")]
+    return url
 
 
 def get_state(key: str, default: str | None = None) -> str | None:
