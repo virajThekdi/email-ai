@@ -87,7 +87,8 @@ except APIError as exc:
     st.error("Supabase is connected, but the dashboard cannot read the `tasks` table yet.")
     st.info(
         "Open Supabase SQL Editor, run the latest `supabase_schema.sql`, then restart this Streamlit app. "
-        "Also confirm Streamlit secrets contain `SUPABASE_URL` and `SUPABASE_ANON_KEY` only."
+        "For manual sync, Streamlit secrets should include `SUPABASE_URL` and either `SUPABASE_SERVICE_ROLE_KEY` "
+        "or `SUPABASE_ANON_KEY` with the latest SQL policies."
     )
     with st.expander("Technical detail"):
         st.code(str(exc))

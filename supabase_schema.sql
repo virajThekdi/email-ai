@@ -88,16 +88,27 @@ drop policy if exists "Allow anon read emails" on emails;
 drop policy if exists "Allow anon read tasks" on tasks;
 drop policy if exists "Allow anon update tasks" on tasks;
 drop policy if exists "Allow anon read ai memories" on ai_memories;
+drop policy if exists "Allow anon insert emails" on emails;
+drop policy if exists "Allow anon insert tasks" on tasks;
+drop policy if exists "Allow anon read app state" on app_state;
+drop policy if exists "Allow anon write app state" on app_state;
+drop policy if exists "Allow anon insert ai memories" on ai_memories;
 
 create policy "Allow anon read emails" on emails for select using (true);
+create policy "Allow anon insert emails" on emails for insert with check (true);
 create policy "Allow anon read tasks" on tasks for select using (true);
+create policy "Allow anon insert tasks" on tasks for insert with check (true);
 create policy "Allow anon update tasks" on tasks for update using (true) with check (true);
+create policy "Allow anon read app state" on app_state for select using (true);
+create policy "Allow anon write app state" on app_state for all using (true) with check (true);
 create policy "Allow anon read ai memories" on ai_memories for select using (true);
+create policy "Allow anon insert ai memories" on ai_memories for insert with check (true);
 
 grant usage on schema public to anon, authenticated, service_role;
-grant select on emails, tasks, ai_memories to anon, authenticated;
+grant select, insert on emails, tasks, ai_memories to anon, authenticated;
+grant select, insert, update on app_state to anon, authenticated;
 grant update (status, completed_at) on tasks to anon, authenticated;
 grant all on emails, tasks, app_state, ai_memories to service_role;
-grant usage, select on all sequences in schema public to service_role;
+grant usage, select on all sequences in schema public to anon, authenticated, service_role;
 
 -- Use SUPABASE_SERVICE_ROLE_KEY for GitHub Actions writes. Keep it out of Streamlit Cloud when possible.

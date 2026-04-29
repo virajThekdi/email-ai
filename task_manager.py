@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+from postgrest.exceptions import APIError
+
 from supabase_client import get_supabase
 
 
@@ -22,11 +24,12 @@ def store_email(email: dict) -> bool:
         "is_sent": email.get("is_sent", False),
         "timestamp": email["timestamp"].isoformat(),
     }
-    response = (
-        get_supabase()
+    response = _write_with_schema_fallback(
+        "emails",
+        payload,
+        lambda clean_payload: get_supabase()
         .table("emails")
-        .upsert(payload, on_conflict="message_id", ignore_duplicates=True)
-        .execute()
+        .upsert(clean_payload, on_conflict="message_id", ignore_duplicates=True),
     )
     return bool(response.data)
 
@@ -64,7 +67,7 @@ def create_task_from_email(email: dict, analysis: dict) -> None:
             "has_attachments": bool(email.get("attachment_names")),
             "task_type": "reply",
         }
-        get_supabase().table("tasks").insert(payload).execute()
+        _write_with_schema_fallback("tasks", payload, lambda clean_payload: get_supabase().table("tasks").insert(clean_payload))
 
 
 def store_reply_memory(email: dict) -> None:
@@ -80,23 +83,33 @@ def store_reply_memory(email: dict) -> None:
         "reply_text": body[:2500],
         "category": None,
     }
-    get_supabase().table("ai_memories").insert(payload).execute()
+    try:
+        _write_with_schema_fallback(
+            "ai_memories",
+            payload,
+            lambda clean_payload: get_supabase().table("ai_memories").insert(clean_payload),
+        )
+    except APIError:
+        return
 
 
 def get_reply_context(sender: str, subject: str = "", limit: int = 4) -> str:
     domain = _email_domain(sender)
     if not domain:
         return ""
-    memories = (
-        get_supabase()
-        .table("ai_memories")
-        .select("subject,reply_text,created_at")
-        .eq("sender_domain", domain)
-        .order("created_at", desc=True)
-        .limit(limit)
-        .execute()
-        .data
-    )
+    try:
+        memories = (
+            get_supabase()
+            .table("ai_memories")
+            .select("subject,reply_text,created_at")
+            .eq("sender_domain", domain)
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+            .data
+        )
+    except APIError:
+        return ""
     if not memories:
         return ""
     return "\n\n".join(f"Previous reply about {item.get('subject') or 'email'}:\n{item['reply_text']}" for item in memories)
@@ -262,3 +275,23 @@ def _clean_date(value: str | None) -> str | None:
         return datetime.fromisoformat(text).date().isoformat()
     except ValueError:
         return None
+
+
+def _write_with_schema_fallback(table: str, payload: dict, build_query):
+    clean_payload = dict(payload)
+    while True:
+        try:
+            return build_query(clean_payload).execute()
+        except APIError as exc:
+            missing_column = _missing_column_from_error(exc)
+            if not missing_column or missing_column not in clean_payload:
+                raise
+            clean_payload.pop(missing_column, None)
+
+
+def _missing_column_from_error(exc: APIError) -> str | None:
+    message = str(exc)
+    marker = "Could not find the '"
+    if marker not in message:
+        return None
+    return message.split(marker, 1)[1].split("' column", 1)[0]
