@@ -38,8 +38,18 @@ alter table emails enable row level security;
 alter table tasks enable row level security;
 alter table app_state enable row level security;
 
+drop policy if exists "Allow anon read emails" on emails;
+drop policy if exists "Allow anon read tasks" on tasks;
+drop policy if exists "Allow anon update tasks" on tasks;
+
 create policy "Allow anon read emails" on emails for select using (true);
 create policy "Allow anon read tasks" on tasks for select using (true);
 create policy "Allow anon update tasks" on tasks for update using (true) with check (true);
+
+grant usage on schema public to anon, authenticated, service_role;
+grant select on emails, tasks to anon, authenticated;
+grant update (status, completed_at) on tasks to anon, authenticated;
+grant all on emails, tasks, app_state to service_role;
+grant usage, select on all sequences in schema public to service_role;
 
 -- Use SUPABASE_SERVICE_ROLE_KEY for GitHub Actions writes. Keep it out of Streamlit Cloud when possible.

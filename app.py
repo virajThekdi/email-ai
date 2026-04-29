@@ -1,4 +1,5 @@
 import streamlit as st
+from postgrest.exceptions import APIError
 
 from supabase_client import MissingConfigError
 from task_manager import get_dashboard_tasks, mark_task_completed
@@ -49,6 +50,15 @@ try:
     data = get_dashboard_tasks()
 except MissingConfigError as exc:
     st.error(str(exc))
+    st.stop()
+except APIError as exc:
+    st.error("Supabase is connected, but the dashboard cannot read the `tasks` table yet.")
+    st.info(
+        "Open Supabase SQL Editor, run the latest `supabase_schema.sql`, then restart this Streamlit app. "
+        "Also confirm Streamlit secrets contain `SUPABASE_URL` and `SUPABASE_ANON_KEY` only."
+    )
+    with st.expander("Technical detail"):
+        st.code(str(exc))
     st.stop()
 
 pending = data["pending"]
