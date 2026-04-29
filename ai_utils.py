@@ -39,6 +39,26 @@ ACTION_KEYWORDS = (
     "follow up",
 )
 
+RFQ_KEYWORDS = ("rfq", "quotation", "quote", "rate", "price", "pricing", "offer", "estimate")
+ORDER_KEYWORDS = ("purchase order", "po", "order confirmed", "confirmed order", "go ahead", "final order", "dispatch")
+NEGOTIATION_KEYWORDS = ("discount", "negotiate", "best price", "reduce", "final rate", "counter")
+BLOCKING_KEYWORDS = ("hold", "waiting", "pending", "material required", "shortage", "not available", "clarify", "missing")
+PRODUCTION_KEYWORDS = ("produce", "production", "ready", "dispatch", "delivery", "rework", "cutting", "polish", "toughened")
+GLASS_KEYWORDS = (
+    "glass",
+    "toughened",
+    "tempered",
+    "laminated",
+    "float",
+    "mirror",
+    "dgu",
+    "igu",
+    "frosted",
+    "clear",
+    "extra clear",
+)
+UNITS = ("pcs", "pieces", "sheets", "nos", "kg", "sqm", "sqft", "mm")
+
 NOISE_KEYWORDS = (
     "unsubscribe",
     "newsletter",
@@ -113,6 +133,41 @@ def should_use_ai(subject: str, body: str, sender: str, attachment_text: str = "
     return False
 
 
+def production_intelligence(
+    subject: str,
+    body: str,
+    sender: str,
+    timestamp: datetime | None = None,
+    attachment_text: str = "",
+    attachment_names: list[str] | None = None,
+) -> dict[str, Any]:
+    text = strip_email_noise(f"{subject}\n{body}\n{attachment_text}", 6000)
+    lower = text.lower()
+    attachment_names = attachment_names or []
+    is_rfq = any(word in lower for word in RFQ_KEYWORDS)
+    is_order = any(word in lower for word in ORDER_KEYWORDS)
+    is_negotiation = any(word in lower for word in NEGOTIATION_KEYWORDS)
+    is_blocking = any(word in lower for word in BLOCKING_KEYWORDS)
+    product_type = _extract_product_type(lower)
+    quantity = _extract_quantity(lower)
+    delivery_location = _extract_location(text)
+    deadline = extract_deadline(subject, text)
+    missing_fields = _missing_fields(product_type, quantity, deadline, delivery_location, is_rfq or is_order)
+    workflow_stage = _workflow_stage(lower, is_rfq, is_order, is_negotiation, is_blocking)
+    priority_score = _priority_score(lower, quantity, deadline, is_rfq, is_order, is_blocking, attachment_names, timestamp)
+    return {
+        "workflow_stage": workflow_stage,
+        "product_type": product_type,
+        "quantity": quantity,
+        "delivery_location": delivery_location,
+        "is_rfq": is_rfq,
+        "is_order": is_order,
+        "is_blocking": is_blocking or bool(missing_fields),
+        "missing_fields": ", ".join(missing_fields),
+        "priority_score": priority_score,
+    }
+
+
 def extract_deadline(subject: str, body: str) -> str | None:
     text = f"{subject}\n{body}".lower()
     if "today" in text:
@@ -134,26 +189,31 @@ def rule_based_analysis(
     clean_body = strip_email_noise(body, 900)
     combined = f"{clean_body}\n{attachment_text}"
     priority = rule_priority(subject, combined, timestamp)
-    topic = subject.strip() or clean_body.split(".")[0][:80] or "email request"
-    task = f"Respond to {sender} about {topic}".strip()
     attachment_names = attachment_names or []
+    production = production_intelligence(subject, body, sender, timestamp, attachment_text, attachment_names)
+    task = _production_task_text(sender, subject, production)
+    if production["priority_score"] >= 75:
+        priority = "high"
+    elif production["priority_score"] >= 45 and priority == "low":
+        priority = "medium"
     return {
         "summary": (clean_body[:180] or subject or "Email needs review").strip(),
         "task_text": task[:220],
         "priority": priority,
         "deadline": extract_deadline(subject, combined),
         "deadline_date": None,
-        "next_action": "Open the email thread and send the needed response.",
-        "priority_reason": "Priority estimated from urgency keywords and email age.",
-        "suggested_reply": "Thanks for your email. I will check this and get back to you shortly.",
+        "next_action": _production_next_action(production),
+        "priority_reason": _production_priority_reason(production, priority),
+        "suggested_reply": _production_reply_draft(production),
         "category": _rule_category(subject, combined),
         "client_name": "",
         "contact_name": sender,
-        "intent": "request",
+        "intent": production["workflow_stage"],
         "sentiment": "neutral",
-        "escalation_risk": "low",
+        "escalation_risk": "high" if production["is_blocking"] and production["priority_score"] >= 70 else "medium" if production["is_blocking"] else "low",
         "attachment_summary": _fallback_attachment_summary(attachment_names, attachment_text),
         "tasks": [],
+        **production,
     }
 
 
@@ -180,11 +240,17 @@ def analyze_email(
     clean_body = strip_email_noise(body)
     attachment_names = attachment_names or []
     prompt = (
-        "You are an email task assistant. Convert this email and its attachment text into an action board item. "
+        "You are a production control assistant for a manufacturing/glass company. "
+        "Your goal is to show what to quote, produce, dispatch, follow up, or unblock. "
+        "Convert this email and its attachment text into a production action board item. "
         "Return only JSON. Keys: summary, task_text, priority, deadline, deadline_date, next_action, "
         "priority_reason, suggested_reply, category, client_name, contact_name, intent, sentiment, "
-        "escalation_risk, attachment_summary, tasks. "
+        "escalation_risk, attachment_summary, workflow_stage, product_type, quantity, delivery_location, "
+        "is_rfq, is_order, is_blocking, missing_fields, priority_score, tasks. "
         "priority must be high, medium, or low. deadline_date should be YYYY-MM-DD or null. "
+        "workflow_stage should be rfq, negotiation, order_confirmed, production, dispatch, follow_up, blocked, or general. "
+        "priority_score is 0-100 based on urgency, quantity, deadline, blocking risk, and business value. "
+        "missing_fields should list missing RFQ/order details like product, quantity, delivery date, location, specs. "
         "sentiment should be positive, neutral, frustrated, angry, or urgent. "
         "escalation_risk should be low, medium, or high. "
         "tasks is an array of up to 5 short task strings if the email contains multiple actions. "
@@ -202,6 +268,7 @@ def analyze_email(
     merged = {**fallback, **{k: v for k, v in result.items() if v not in (None, "")}}
     merged["priority"] = _normalize_priority(str(merged.get("priority", fallback["priority"])))
     merged["escalation_risk"] = _normalize_risk(str(merged.get("escalation_risk", fallback["escalation_risk"])))
+    merged["priority_score"] = _normalize_score(merged.get("priority_score", fallback.get("priority_score", 0)))
     if not isinstance(merged.get("tasks"), list):
         merged["tasks"] = []
     return merged
@@ -230,8 +297,21 @@ def _normalize_risk(value: str) -> str:
     return value if value in {"high", "medium", "low"} else "low"
 
 
+def _normalize_score(value: Any) -> int:
+    try:
+        return max(0, min(100, int(value)))
+    except (TypeError, ValueError):
+        return 0
+
+
 def _rule_category(subject: str, body: str) -> str:
     text = f"{subject} {body}".lower()
+    if any(word in text for word in RFQ_KEYWORDS):
+        return "rfq"
+    if any(word in text for word in ORDER_KEYWORDS):
+        return "order"
+    if any(word in text for word in PRODUCTION_KEYWORDS):
+        return "production"
     if any(word in text for word in ("quote", "quotation", "proposal", "price")):
         return "quotation"
     if any(word in text for word in ("invoice", "payment", "receipt", "bill")):
@@ -241,6 +321,162 @@ def _rule_category(subject: str, body: str) -> str:
     if any(word in text for word in ("complaint", "issue", "problem", "refund")):
         return "support"
     return "general"
+
+
+def _extract_product_type(text: str) -> str:
+    thickness = re.search(r"\b(\d+(?:\.\d+)?)\s*mm\b", text)
+    glass_words = [word for word in GLASS_KEYWORDS if word in text]
+    parts = []
+    if thickness:
+        parts.append(f"{thickness.group(1)}mm")
+    parts.extend(glass_words[:3])
+    if parts:
+        return " ".join(dict.fromkeys(parts))
+    return "glass" if "glass" in text else ""
+
+
+def _extract_quantity(text: str) -> str:
+    patterns = [
+        r"\b(\d+(?:,\d+)?(?:\.\d+)?)\s*(pcs|pieces|sheets|nos|kg|sqm|sqft)\b",
+        r"\bqty[:\s-]*(\d+(?:,\d+)?(?:\.\d+)?)\b",
+        r"\bquantity[:\s-]*(\d+(?:,\d+)?(?:\.\d+)?)\b",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            return " ".join(group for group in match.groups() if group)
+    return ""
+
+
+def _extract_location(text: str) -> str:
+    match = re.search(r"\b(?:delivery|dispatch|ship|send)\s+(?:to|at|in)\s+([A-Z][A-Za-z ]{2,40})", text)
+    if match:
+        return match.group(1).strip()
+    match = re.search(r"\b(?:location|site|city)[:\s-]+([A-Z][A-Za-z ]{2,40})", text)
+    return match.group(1).strip() if match else ""
+
+
+def _missing_fields(product: str, quantity: str, deadline: str | None, location: str, needs_specs: bool) -> list[str]:
+    if not needs_specs:
+        return []
+    missing = []
+    if not product:
+        missing.append("product/spec")
+    if not quantity:
+        missing.append("quantity")
+    if not deadline:
+        missing.append("delivery date")
+    if not location:
+        missing.append("delivery location")
+    return missing
+
+
+def _workflow_stage(text: str, is_rfq: bool, is_order: bool, is_negotiation: bool, is_blocking: bool) -> str:
+    if is_blocking:
+        return "blocked"
+    if is_order:
+        return "order_confirmed"
+    if is_negotiation:
+        return "negotiation"
+    if any(word in text for word in ("dispatch", "ready", "vehicle", "transport", "delivery")):
+        return "dispatch"
+    if any(word in text for word in PRODUCTION_KEYWORDS):
+        return "production"
+    if is_rfq:
+        return "rfq"
+    if "follow up" in text or "any update" in text:
+        return "follow_up"
+    return "general"
+
+
+def _priority_score(
+    text: str,
+    quantity: str,
+    deadline: str | None,
+    is_rfq: bool,
+    is_order: bool,
+    is_blocking: bool,
+    attachments: list[str],
+    timestamp: datetime | None,
+) -> int:
+    score = 20
+    if is_order:
+        score += 30
+    if is_rfq:
+        score += 18
+    if is_blocking:
+        score += 25
+    if any(word in text for word in PRIORITY_KEYWORDS["high"]):
+        score += 25
+    if deadline:
+        score += 18
+    number = re.search(r"\d+", quantity or "")
+    if number and int(number.group(0).replace(",", "")) >= 100:
+        score += 12
+    if attachments:
+        score += 8
+    if timestamp:
+        age_hours = (datetime.now(timezone.utc) - timestamp).total_seconds() / 3600
+        if age_hours >= 12:
+            score += 8
+        if age_hours >= 24:
+            score += 10
+    return max(0, min(100, score))
+
+
+def _production_task_text(sender: str, subject: str, production: dict[str, Any]) -> str:
+    product = production.get("product_type") or "order details"
+    quantity = production.get("quantity")
+    stage = production.get("workflow_stage")
+    if stage == "rfq":
+        return f"Prepare quotation for {quantity + ' ' if quantity else ''}{product}"
+    if stage == "order_confirmed":
+        return f"Plan production for {quantity + ' ' if quantity else ''}{product}"
+    if stage == "blocked":
+        return f"Unblock production/RFQ: collect {production.get('missing_fields') or 'pending details'}"
+    if stage == "dispatch":
+        return f"Coordinate dispatch for {quantity + ' ' if quantity else ''}{product}"
+    return f"Respond to {sender} about {subject or product}"
+
+
+def _production_next_action(production: dict[str, Any]) -> str:
+    if production.get("missing_fields"):
+        return f"Ask client for missing details: {production['missing_fields']}."
+    stage = production.get("workflow_stage")
+    if stage == "rfq":
+        return "Check specs, calculate rate, and send quotation."
+    if stage == "order_confirmed":
+        return "Confirm specs, production slot, and delivery timeline."
+    if stage == "dispatch":
+        return "Confirm readiness, vehicle/logistics, and dispatch time."
+    if stage == "blocked":
+        return "Resolve the blocking detail before production proceeds."
+    return "Reply with the next required production or commercial update."
+
+
+def _production_priority_reason(production: dict[str, Any], priority: str) -> str:
+    reasons = []
+    if production.get("is_order"):
+        reasons.append("confirmed order")
+    if production.get("is_rfq"):
+        reasons.append("RFQ/inquiry")
+    if production.get("quantity"):
+        reasons.append(f"quantity {production['quantity']}")
+    if production.get("is_blocking"):
+        reasons.append("blocking or missing production details")
+    if production.get("priority_score"):
+        reasons.append(f"score {production['priority_score']}/100")
+    return f"{priority.upper()} because " + ", ".join(reasons or ["business email needs response"])
+
+
+def _production_reply_draft(production: dict[str, Any]) -> str:
+    if production.get("missing_fields"):
+        return f"Thank you. Please share the missing details ({production['missing_fields']}) so we can proceed."
+    if production.get("workflow_stage") == "rfq":
+        return "Thank you for the inquiry. We are checking the specifications and will share the quotation shortly."
+    if production.get("workflow_stage") == "order_confirmed":
+        return "Order noted. We will confirm the production schedule and delivery timeline shortly."
+    return "Thank you. We will check and update you shortly."
 
 
 def _fallback_attachment_summary(attachment_names: list[str], attachment_text: str) -> str:

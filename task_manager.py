@@ -65,6 +65,15 @@ def create_task_from_email(email: dict, analysis: dict) -> None:
             "escalation_risk": analysis.get("escalation_risk"),
             "attachment_summary": analysis.get("attachment_summary") or email.get("attachment_summary"),
             "has_attachments": bool(email.get("attachment_names")),
+            "workflow_stage": analysis.get("workflow_stage"),
+            "product_type": analysis.get("product_type"),
+            "quantity": analysis.get("quantity"),
+            "delivery_location": analysis.get("delivery_location"),
+            "is_rfq": bool(analysis.get("is_rfq")),
+            "is_order": bool(analysis.get("is_order")),
+            "is_blocking": bool(analysis.get("is_blocking")),
+            "missing_fields": analysis.get("missing_fields"),
+            "priority_score": int(analysis.get("priority_score") or 0),
             "task_type": "reply",
         }
         _write_with_schema_fallback("tasks", payload, lambda clean_payload: get_supabase().table("tasks").insert(clean_payload))
@@ -204,6 +213,8 @@ def create_follow_up_tasks(after_hours: int = 24) -> int:
             "priority": "medium",
             "status": "pending",
             "next_action": "Send a short follow-up asking whether they need anything else.",
+            "workflow_stage": "follow_up",
+            "priority_score": 55,
             "task_type": "follow_up",
         }
         supabase.table("tasks").insert(payload).execute()
@@ -223,7 +234,14 @@ def get_dashboard_tasks() -> dict[str, list[dict]]:
         .execute()
         .data
     )
-    pending.sort(key=lambda row: (PRIORITY_ORDER.get(row.get("priority"), 3), row.get("created_at") or ""))
+    pending.sort(
+        key=lambda row: (
+            -(row.get("priority_score") or 0),
+            PRIORITY_ORDER.get(row.get("priority"), 3),
+            row.get("deadline_date") or "9999-12-31",
+            row.get("created_at") or "",
+        )
+    )
     return {
         "pending": [task for task in pending if task.get("task_type") != "follow_up"],
         "follow_ups": [task for task in pending if task.get("task_type") == "follow_up"],

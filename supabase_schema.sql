@@ -35,6 +35,15 @@ create table if not exists tasks (
   escalation_risk text,
   attachment_summary text,
   has_attachments boolean not null default false,
+  workflow_stage text,
+  product_type text,
+  quantity text,
+  delivery_location text,
+  is_rfq boolean not null default false,
+  is_order boolean not null default false,
+  is_blocking boolean not null default false,
+  missing_fields text,
+  priority_score integer not null default 0,
   task_type text not null default 'reply' check (task_type in ('reply', 'follow_up', 'manual'))
 );
 
@@ -72,11 +81,22 @@ alter table tasks add column if not exists sentiment text;
 alter table tasks add column if not exists escalation_risk text;
 alter table tasks add column if not exists attachment_summary text;
 alter table tasks add column if not exists has_attachments boolean not null default false;
+alter table tasks add column if not exists workflow_stage text;
+alter table tasks add column if not exists product_type text;
+alter table tasks add column if not exists quantity text;
+alter table tasks add column if not exists delivery_location text;
+alter table tasks add column if not exists is_rfq boolean not null default false;
+alter table tasks add column if not exists is_order boolean not null default false;
+alter table tasks add column if not exists is_blocking boolean not null default false;
+alter table tasks add column if not exists missing_fields text;
+alter table tasks add column if not exists priority_score integer not null default 0;
 
 create index if not exists idx_emails_thread_time on emails(thread_id, timestamp desc);
 create index if not exists idx_emails_sent_time on emails(is_sent, timestamp desc);
 create index if not exists idx_tasks_status_priority on tasks(status, priority, created_at);
 create index if not exists idx_tasks_thread_status on tasks(thread_id, status);
+create index if not exists idx_tasks_priority_score on tasks(status, priority_score desc, deadline_date);
+create index if not exists idx_tasks_production_stage on tasks(workflow_stage, status);
 create index if not exists idx_ai_memories_domain on ai_memories(sender_domain, created_at desc);
 
 -- Simple single-user deployment mode:

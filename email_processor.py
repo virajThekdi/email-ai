@@ -18,6 +18,7 @@ from googleapiclient.discovery import build
 
 from attachment_utils import extract_attachments_from_message
 from ai_utils import analyze_email, is_actionable_email, rule_based_analysis, should_use_ai, strip_email_noise
+from production_logic import analyze_production_email
 from supabase_client import get_setting, get_state, set_state
 from task_manager import (
     complete_tasks_for_sent_replies,
@@ -56,13 +57,19 @@ def _process_emails(emails: list[dict]) -> tuple[int, int]:
         if inserted and email["is_sent"]:
             store_reply_memory(email)
         if inserted and not email["is_sent"]:
+            production_analysis = analyze_production_email(
+                email["subject"],
+                email["body"] + "\n" + email.get("attachment_text", ""),
+                email["sender"],
+                email.get("attachment_names") or [],
+            )
             actionable, _reason = is_actionable_email(
                 email["subject"],
                 email["body"],
                 email["sender"],
                 email.get("attachment_names") or [],
             )
-            if not actionable:
+            if not actionable and production_analysis.get("workflow_stage") == "general":
                 continue
             use_ai = should_use_ai(
                 email["subject"],
@@ -92,6 +99,11 @@ def _process_emails(emails: list[dict]) -> tuple[int, int]:
                     attachment_text=email.get("attachment_text", ""),
                     attachment_names=email.get("attachment_names") or [],
                 )
+            analysis = {**analysis, **{key: value for key, value in production_analysis.items() if value not in (None, "", [])}}
+            if production_analysis.get("priority_score", 0) >= 70:
+                analysis["priority"] = "high"
+            elif production_analysis.get("priority_score", 0) >= 40 and analysis.get("priority") == "low":
+                analysis["priority"] = "medium"
             create_task_from_email(email, analysis)
             created_candidates += 1
     return created_candidates, max_position

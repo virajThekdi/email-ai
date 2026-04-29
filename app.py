@@ -33,7 +33,8 @@ def render_task(task: dict, key_prefix: str) -> None:
     with st.container(border=True):
         top = st.columns([0.62, 0.18, 0.2], vertical_alignment="center")
         top[0].markdown(f"**{task.get('task_text', 'Untitled task')}**")
-        top[1].caption(priority_label(priority))
+        score = task.get("priority_score") or 0
+        top[1].caption(f"{priority_label(priority)} | {score}/100")
         if top[2].button("Mark complete", key=f"{key_prefix}-{task['id']}", use_container_width=True):
             mark_task_completed(task["id"])
             st.rerun()
@@ -41,17 +42,31 @@ def render_task(task: dict, key_prefix: str) -> None:
         meta = []
         if task.get("deadline"):
             meta.append(f"Deadline: {task['deadline']}")
+        if task.get("product_type"):
+            meta.append(f"Product: {task['product_type']}")
+        if task.get("quantity"):
+            meta.append(f"Qty: {task['quantity']}")
+        if task.get("delivery_location"):
+            meta.append(f"Location: {task['delivery_location']}")
         if task.get("next_action"):
             meta.append(f"Next: {task['next_action']}")
         if meta:
             st.write(" | ".join(meta))
         detail_cols = st.columns(3)
-        if task.get("category"):
-            detail_cols[0].caption(f"Category: {task['category']}")
-        if task.get("intent"):
-            detail_cols[1].caption(f"Intent: {task['intent']}")
-        if task.get("escalation_risk"):
-            detail_cols[2].caption(f"Risk: {task['escalation_risk']}")
+        detail_cols[0].caption(f"Stage: {task.get('workflow_stage') or task.get('category') or '-'}")
+        detail_cols[1].caption(f"Intent: {task.get('intent') or '-'}")
+        detail_cols[2].caption(f"Risk: {task.get('escalation_risk') or '-'}")
+        flags = []
+        if task.get("is_rfq"):
+            flags.append("RFQ")
+        if task.get("is_order"):
+            flags.append("ORDER")
+        if task.get("is_blocking"):
+            flags.append("BLOCKING")
+        if flags:
+            st.warning(" | ".join(flags))
+        if task.get("missing_fields"):
+            st.error(f"Missing: {task['missing_fields']}")
         if task.get("client_name") or task.get("contact_name"):
             st.caption(f"Client/contact: {task.get('client_name') or '-'} / {task.get('contact_name') or '-'}")
         if task.get("priority_reason"):
@@ -111,17 +126,22 @@ next_task = pending[0] if pending else (follow_ups[0] if follow_ups else None)
 st.title("Email Task Tracker")
 st.caption("Intelligent Action Board")
 
-metric_cols = st.columns(4)
+blocking = [task for task in pending + follow_ups if task.get("is_blocking")]
+rfqs = [task for task in pending if task.get("is_rfq")]
+orders = [task for task in pending if task.get("is_order")]
+
+metric_cols = st.columns(5)
 metric_cols[0].metric("Pending", len(pending))
-metric_cols[1].metric("Follow-ups", len(follow_ups))
-metric_cols[2].metric("High priority", len([t for t in pending if t.get("priority") == "high"]))
-metric_cols[3].metric("Completed history", len(completed))
+metric_cols[1].metric("RFQs", len(rfqs))
+metric_cols[2].metric("Orders", len(orders))
+metric_cols[3].metric("Blocking", len(blocking))
+metric_cols[4].metric("Follow-ups", len(follow_ups))
 
 st.divider()
 
 if next_task:
     with st.container(border=True):
-        st.subheader("Suggested Next Action")
+        st.subheader("Next Best Production Task")
         st.write(next_task.get("next_action") or next_task.get("task_text"))
         st.caption(next_task.get("summary") or "")
 else:
@@ -134,13 +154,19 @@ with st.container(border=True):
 left, right = st.columns([0.64, 0.36], gap="large")
 
 with left:
-    st.subheader("Pending Tasks")
+    st.subheader("Production / RFQ Tasks")
     if not pending:
         st.info("No pending email tasks.")
     for task in pending:
         render_task(task, "pending")
 
 with right:
+    st.subheader("Blocking")
+    if not blocking:
+        st.success("No blocking production/RFQ items.")
+    for task in blocking[:8]:
+        render_task(task, "blocking")
+
     st.subheader("Follow-Ups")
     if not follow_ups:
         st.info("No follow-ups needed.")
