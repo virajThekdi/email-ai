@@ -1,131 +1,225 @@
 # Email Task Tracker - Intelligent Action Board
 
-An internal Streamlit app plus GitHub Actions automation that turns Gmail threads into a continuously updated action board.
+Internal Streamlit app plus GitHub Actions automation that turns Outlook or Gmail email threads into a continuously updated task board.
+
+The default setup is now **Outlook / Microsoft 365** through Microsoft Graph.
 
 ## What It Does
 
-- Fetches Gmail messages every 10 minutes through GitHub Actions.
-- Stores raw email metadata and task state in Supabase Postgres.
-- Creates one actionable task per inbound thread with rules plus lightweight AI.
-- Marks tasks complete when a sent reply appears in the same Gmail thread.
-- Creates follow-up tasks when you sent an email and no reply arrives after the configured window.
-- Shows only pending work, follow-ups, suggested next action, and completed history in Streamlit.
+- Runs every 10 minutes in GitHub Actions.
+- Reads Outlook inbox and sent mail with Microsoft Graph.
+- Stores emails and tasks in Supabase Postgres.
+- Converts inbound emails into actionable tasks with rules plus optional free AI.
+- Marks tasks completed when a sent reply appears in the same conversation.
+- Creates follow-up tasks when you sent an email and no reply arrives after the configured time.
+- Shows only pending tasks, follow-ups, suggested next action, and completed history in Streamlit.
+
+## Free Services Used
+
+- GitHub repo and GitHub Actions
+- Streamlit Community Cloud
+- Supabase free tier
+- Microsoft Graph API for Outlook mail
+- Optional Groq free tier and Gemini free tier for AI summaries
 
 ## Files
 
 - `app.py` - Streamlit dashboard.
-- `email_processor.py` - Gmail fetcher and automation entrypoint.
-- `ai_utils.py` - Groq/Gemini enrichment with rule-based fallback.
+- `email_processor.py` - Outlook/Gmail automation entrypoint.
+- `ai_utils.py` - Groq/Gemini enrichment with rule fallback.
 - `task_manager.py` - task lifecycle, completion, follow-up logic.
 - `supabase_client.py` - Supabase client and state helpers.
-- `supabase_schema.sql` - database schema and indexes.
-- `.github/workflows/email_job.yml` - always-on scheduled processor.
+- `supabase_schema.sql` - database schema.
+- `.github/workflows/email_job.yml` - scheduled background job.
 
-## Environment Variables
+## Required Secrets
 
-Required for automation:
+### GitHub Actions Secrets
 
-- `SUPABASE_URL`
-- `SUPABASE_SERVICE_ROLE_KEY`
-- `GMAIL_TOKEN_JSON`
+Add these in GitHub repo -> Settings -> Secrets and variables -> Actions:
 
-Required for Streamlit:
+```text
+EMAIL_PROVIDER=outlook
+SUPABASE_URL=your Supabase project URL
+SUPABASE_SERVICE_ROLE_KEY=your Supabase service role key
+MICROSOFT_TENANT_ID=your Microsoft tenant ID
+MICROSOFT_CLIENT_ID=your Microsoft app client ID
+MICROSOFT_CLIENT_SECRET=your Microsoft app client secret
+MICROSOFT_MAILBOX_USER=user@clientdomain.com
+```
 
-- `SUPABASE_URL`
-- `SUPABASE_ANON_KEY`
+Optional AI secrets:
 
-Optional AI:
+```text
+GROQ_API_KEY=your Groq key
+GEMINI_API_KEY=your Gemini key
+```
 
-- `GROQ_API_KEY`
-- `GEMINI_API_KEY`
-- `GROQ_MODEL` defaults to `llama-3.1-8b-instant`
-- `GEMINI_MODEL` defaults to `gemini-1.5-flash`
-- `FOLLOW_UP_AFTER_HOURS` defaults to `24`
+Optional behavior:
+
+```text
+FOLLOW_UP_AFTER_HOURS=24
+OUTLOOK_MAX_PAGES=4
+```
+
+### Streamlit Secrets
+
+Add these in Streamlit Cloud -> App -> Settings -> Secrets:
+
+```toml
+SUPABASE_URL = "https://your-project.supabase.co"
+SUPABASE_ANON_KEY = "your Supabase anon key"
+```
+
+Do not put `SUPABASE_SERVICE_ROLE_KEY` in Streamlit.
 
 ## 1. Supabase Setup
 
 1. Create a Supabase project.
-2. Open SQL Editor and run `supabase_schema.sql`.
-3. Copy your project URL into `SUPABASE_URL`.
-4. Copy the anon public key into `SUPABASE_ANON_KEY` for Streamlit.
-5. Copy the service role key into `SUPABASE_SERVICE_ROLE_KEY` for GitHub Actions only.
+2. Open Supabase SQL Editor.
+3. Paste the full contents of `supabase_schema.sql`.
+4. Click Run.
+5. Go to Project Settings -> API.
+6. Copy:
+   - Project URL -> `SUPABASE_URL`
+   - anon public key -> `SUPABASE_ANON_KEY`
+   - service_role key -> `SUPABASE_SERVICE_ROLE_KEY`
 
-The service role key bypasses row-level security and should never be exposed in the Streamlit app.
+The service role key is only for GitHub Actions because the automation writes emails and tasks.
 
-## 2. Gmail API Setup
+## 2. Microsoft Outlook Setup
 
-1. In Google Cloud Console, create or select a project.
-2. Enable the Gmail API.
-3. Configure the OAuth consent screen for internal/testing use.
-4. Create an OAuth client ID for a desktop app.
-5. Download the client credentials JSON.
-6. Generate a user token locally with the Gmail readonly scope:
+Use this when the client uses Outlook or Microsoft 365.
+
+1. Go to Microsoft Entra admin center or Azure Portal.
+2. Open App registrations.
+3. Click New registration.
+4. Name it `Email Task Tracker`.
+5. Choose the account type for the client tenant.
+6. After creating it, copy:
+   - Application client ID -> `MICROSOFT_CLIENT_ID`
+   - Directory tenant ID -> `MICROSOFT_TENANT_ID`
+7. Open Certificates & secrets.
+8. Create a new client secret.
+9. Copy the secret value -> `MICROSOFT_CLIENT_SECRET`.
+10. Open API permissions.
+11. Add Microsoft Graph application permission:
+   - `Mail.Read`
+12. Click Grant admin consent.
+13. Set `MICROSOFT_MAILBOX_USER` to the mailbox address the app should read, for example:
+
+```text
+tasks@clientcompany.com
+```
+
+Best production setup: use one shared/client mailbox and give the app access only to that mailbox.
+
+## 3. GitHub Deployment
+
+Create a GitHub repo, then run these commands from the project folder:
 
 ```bash
-python -m pip install google-auth-oauthlib
+git init
+git add .
+git commit -m "Initial Email Task Tracker"
+git branch -M main
+git remote add origin https://github.com/YOUR_USERNAME/YOUR_REPO_NAME.git
+git push -u origin main
 ```
 
-Create a temporary helper script locally:
+Then add GitHub Actions secrets:
 
-```python
-from google_auth_oauthlib.flow import InstalledAppFlow
-
-SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
-flow = InstalledAppFlow.from_client_secrets_file("credentials.json", SCOPES)
-creds = flow.run_local_server(port=0)
-print(creds.to_json())
+```text
+EMAIL_PROVIDER
+SUPABASE_URL
+SUPABASE_SERVICE_ROLE_KEY
+MICROSOFT_TENANT_ID
+MICROSOFT_CLIENT_ID
+MICROSOFT_CLIENT_SECRET
+MICROSOFT_MAILBOX_USER
+GROQ_API_KEY optional
+GEMINI_API_KEY optional
 ```
 
-Save the printed JSON as the GitHub secret `GMAIL_TOKEN_JSON`.
+After secrets are added:
 
-## 3. GitHub Actions Setup
+1. Go to the Actions tab.
+2. Open Email Task Processor.
+3. Click Run workflow.
+4. Check the logs.
+5. Confirm rows appear in Supabase `emails` and `tasks`.
 
-1. Push this repo to GitHub.
-2. Go to repository Settings -> Secrets and variables -> Actions.
-3. Add these secrets:
-   - `SUPABASE_URL`
-   - `SUPABASE_SERVICE_ROLE_KEY`
-   - `GMAIL_TOKEN_JSON`
-   - `GROQ_API_KEY` if using Groq
-   - `GEMINI_API_KEY` if using Gemini fallback
-4. Open Actions and run `Email Task Processor` manually once.
-5. Confirm the run prints fetched message counts and Supabase tables receive rows.
-
-The workflow runs every 10 minutes. GitHub scheduled workflows can be delayed during platform load, so the processor is idempotent and safe to run manually.
+The workflow also runs every 10 minutes automatically.
 
 ## 4. Streamlit Cloud Deployment
 
-1. Push the repo to GitHub.
-2. In Streamlit Cloud, create a new app from the repo.
-3. Set the main file path to `app.py`.
-4. Add secrets:
+1. Go to Streamlit Community Cloud.
+2. Click New app.
+3. Select this GitHub repo.
+4. Branch: `main`.
+5. Main file path: `app.py`.
+6. Open app settings and paste Streamlit secrets:
 
 ```toml
 SUPABASE_URL = "https://your-project.supabase.co"
-SUPABASE_ANON_KEY = "your-anon-key"
+SUPABASE_ANON_KEY = "your Supabase anon key"
 ```
 
-5. Deploy the app.
+7. Deploy.
 
-Streamlit only reads and updates task status. It does not run background email jobs.
+Streamlit is only the dashboard. It does not run the background email job.
+
+## Optional Gmail Mode
+
+If a future client uses Gmail, set this GitHub secret:
+
+```text
+EMAIL_PROVIDER=gmail
+```
+
+Then also add:
+
+```text
+GMAIL_TOKEN_JSON=your Gmail OAuth token JSON
+```
+
+Outlook secrets are not needed for Gmail mode.
 
 ## Local Run
 
+Install dependencies:
+
 ```bash
 pip install -r requirements.txt
+```
+
+Run the dashboard:
+
+```bash
 streamlit run app.py
 ```
 
-For local processor testing, set environment variables and run:
+Run the processor:
 
 ```bash
 python email_processor.py
 ```
 
+## How Client Onboarding Works Later
+
+For each new client:
+
+1. Create or reuse a Supabase project.
+2. Register a Microsoft Entra app in that client tenant.
+3. Add the client mailbox email to `MICROSOFT_MAILBOX_USER`.
+4. Paste the client-specific secrets into GitHub Actions.
+5. Paste only Supabase URL and anon key into Streamlit.
+6. Run the workflow once and verify tasks appear.
+
 ## Production Notes
 
-- Keep AI optional. The rules fallback keeps task generation working if free APIs rate-limit or fail.
-- Keep `GMAIL_MAX_PAGES` low to control API usage.
-- Use the Supabase service role key only in GitHub Actions.
-- Completed tasks are hidden from the main dashboard and retained in history.
-- The `app_state` table stores the last Gmail internal timestamp to avoid repeated full processing.
+- AI keys are optional. Without them, the app still creates tasks using rules.
+- Completed tasks are hidden from the main list and retained in history.
+- Outlook conversations use Microsoft Graph `conversationId` as the task thread ID.
+- `app_state` stores the last Outlook/Gmail sync position to avoid reprocessing.
+- Keep GitHub Actions secrets private. Never expose Microsoft client secrets or Supabase service role keys in Streamlit.
