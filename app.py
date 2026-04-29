@@ -2,7 +2,7 @@ import streamlit as st
 from postgrest.exceptions import APIError
 
 from ai_utils import summarize_board
-from supabase_client import MissingConfigError
+from supabase_client import MissingConfigError, get_setting
 from task_manager import get_dashboard_tasks, mark_task_completed
 
 
@@ -74,6 +74,13 @@ if st.sidebar.button("Sync email now", use_container_width=True):
         st.rerun()
     except Exception as exc:
         st.error("Email sync failed. Check your Streamlit secrets and mailbox password/app password.")
+        if "row-level security" in str(exc).lower():
+            st.warning(
+                "Supabase blocked writes with row-level security. Run the latest `supabase_schema.sql` in "
+                "Supabase SQL Editor, or add `SUPABASE_SERVICE_ROLE_KEY` to Streamlit secrets."
+            )
+        elif not get_setting("SUPABASE_SERVICE_ROLE_KEY"):
+            st.warning("Manual sync writes to Supabase. Add `SUPABASE_SERVICE_ROLE_KEY` to Streamlit secrets.")
         with st.expander("Technical detail"):
             st.code(str(exc))
 

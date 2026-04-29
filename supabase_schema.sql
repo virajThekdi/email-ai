@@ -79,10 +79,13 @@ create index if not exists idx_tasks_status_priority on tasks(status, priority, 
 create index if not exists idx_tasks_thread_status on tasks(thread_id, status);
 create index if not exists idx_ai_memories_domain on ai_memories(sender_domain, created_at desc);
 
-alter table emails enable row level security;
-alter table tasks enable row level security;
-alter table app_state enable row level security;
-alter table ai_memories enable row level security;
+-- Simple single-user deployment mode:
+-- Streamlit and GitHub Actions use secret keys and need to write email/task rows.
+-- Keep the Streamlit app private and do not expose its secrets.
+alter table emails disable row level security;
+alter table tasks disable row level security;
+alter table app_state disable row level security;
+alter table ai_memories disable row level security;
 
 drop policy if exists "Allow anon read emails" on emails;
 drop policy if exists "Allow anon read tasks" on tasks;
