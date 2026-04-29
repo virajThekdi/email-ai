@@ -13,8 +13,12 @@ def store_email(email: dict) -> bool:
         "message_id": email["message_id"],
         "thread_id": email["thread_id"],
         "sender": email.get("sender", ""),
+        "recipients": email.get("recipients", ""),
         "subject": email.get("subject", ""),
         "body": email.get("body", ""),
+        "attachment_names": ", ".join(email.get("attachment_names") or []),
+        "attachment_text": email.get("attachment_text", ""),
+        "attachment_summary": email.get("attachment_summary", ""),
         "is_sent": email.get("is_sent", False),
         "timestamp": email["timestamp"].isoformat(),
     }
@@ -28,20 +32,74 @@ def store_email(email: dict) -> bool:
 
 
 def create_task_from_email(email: dict, analysis: dict) -> None:
-    if _thread_has_open_task(email["thread_id"]):
+    task_texts = [analysis.get("task_text")]
+    task_texts.extend(analysis.get("tasks") or [])
+    seen: set[str] = set()
+    for task_text in task_texts[:5]:
+        if not task_text:
+            continue
+        normalized = str(task_text).strip()
+        if not normalized or normalized.lower() in seen or _task_exists(email["thread_id"], normalized):
+            continue
+        seen.add(normalized.lower())
+        payload = {
+            "thread_id": email["thread_id"],
+            "task_text": normalized[:260],
+            "summary": analysis.get("summary"),
+            "priority": analysis.get("priority", "medium"),
+            "status": "pending",
+            "deadline": analysis.get("deadline"),
+            "deadline_date": _clean_date(analysis.get("deadline_date")),
+            "source_message_id": email["message_id"],
+            "next_action": analysis.get("next_action"),
+            "priority_reason": analysis.get("priority_reason"),
+            "suggested_reply": analysis.get("suggested_reply"),
+            "category": analysis.get("category"),
+            "client_name": analysis.get("client_name"),
+            "contact_name": analysis.get("contact_name"),
+            "intent": analysis.get("intent"),
+            "sentiment": analysis.get("sentiment"),
+            "escalation_risk": analysis.get("escalation_risk"),
+            "attachment_summary": analysis.get("attachment_summary") or email.get("attachment_summary"),
+            "has_attachments": bool(email.get("attachment_names")),
+            "task_type": "reply",
+        }
+        get_supabase().table("tasks").insert(payload).execute()
+
+
+def store_reply_memory(email: dict) -> None:
+    if not email.get("is_sent") or not email.get("body"):
+        return
+    body = email["body"].strip()
+    if len(body) < 20:
         return
     payload = {
-        "thread_id": email["thread_id"],
-        "task_text": analysis["task_text"],
-        "summary": analysis["summary"],
-        "priority": analysis["priority"],
-        "status": "pending",
-        "deadline": analysis.get("deadline"),
-        "source_message_id": email["message_id"],
-        "next_action": analysis.get("next_action"),
-        "task_type": "reply",
+        "sender_domain": _email_domain(email.get("recipients") or email.get("sender") or ""),
+        "recipient": email.get("recipients", ""),
+        "subject": email.get("subject", ""),
+        "reply_text": body[:2500],
+        "category": None,
     }
-    get_supabase().table("tasks").insert(payload).execute()
+    get_supabase().table("ai_memories").insert(payload).execute()
+
+
+def get_reply_context(sender: str, subject: str = "", limit: int = 4) -> str:
+    domain = _email_domain(sender)
+    if not domain:
+        return ""
+    memories = (
+        get_supabase()
+        .table("ai_memories")
+        .select("subject,reply_text,created_at")
+        .eq("sender_domain", domain)
+        .order("created_at", desc=True)
+        .limit(limit)
+        .execute()
+        .data
+    )
+    if not memories:
+        return ""
+    return "\n\n".join(f"Previous reply about {item.get('subject') or 'email'}:\n{item['reply_text']}" for item in memories)
 
 
 def complete_tasks_for_sent_replies() -> int:
@@ -142,7 +200,7 @@ def create_follow_up_tasks(after_hours: int = 24) -> int:
 
 def get_dashboard_tasks() -> dict[str, list[dict]]:
     supabase = get_supabase()
-    pending = supabase.table("tasks").select("*").eq("status", "pending").execute().data
+    pending = supabase.table("tasks").select("*").in_("status", ["pending", "waiting_for_client"]).execute().data
     completed = (
         supabase.table("tasks")
         .select("*")
@@ -172,3 +230,35 @@ def _thread_has_open_task(thread_id: str) -> bool:
         .data
     )
     return bool(existing)
+
+
+def _task_exists(thread_id: str, task_text: str) -> bool:
+    existing = (
+        get_supabase()
+        .table("tasks")
+        .select("id")
+        .eq("thread_id", thread_id)
+        .eq("task_text", task_text[:260])
+        .neq("status", "completed")
+        .limit(1)
+        .execute()
+        .data
+    )
+    return bool(existing)
+
+
+def _email_domain(value: str) -> str:
+    if "@" not in value:
+        return ""
+    first = value.split(",", 1)[0]
+    return first.split("@", 1)[1].split(">", 1)[0].strip().lower()
+
+
+def _clean_date(value: str | None) -> str | None:
+    if not value:
+        return None
+    text = str(value).strip()
+    try:
+        return datetime.fromisoformat(text).date().isoformat()
+    except ValueError:
+        return None

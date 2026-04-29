@@ -2,16 +2,19 @@
 
 Internal Streamlit app plus GitHub Actions automation that turns Outlook or Gmail email threads into a continuously updated task board.
 
-The default setup is now **Outlook / Microsoft 365** through Microsoft Graph.
+The default setup is now **simple Outlook password/app-password mode** through IMAP.
 
 ## What It Does
 
-- Runs every 10 minutes in GitHub Actions.
-- Reads Outlook inbox and sent mail with Microsoft Graph.
+- Runs every 10 minutes in GitHub Actions for 24/7 background sync.
+- Can also sync directly from Streamlit with one button.
+- Reads Outlook inbox and sent mail with IMAP.
 - Stores emails and tasks in Supabase Postgres.
 - Converts inbound emails into actionable tasks with rules plus optional free AI.
 - Marks tasks completed when a sent reply appears in the same conversation.
 - Creates follow-up tasks when you sent an email and no reply arrives after the configured time.
+- Reads supported attachments and includes them in AI analysis.
+- Learns from your sent replies and uses similar examples when drafting suggestions.
 - Shows only pending tasks, follow-ups, suggested next action, and completed history in Streamlit.
 
 ## Free Services Used
@@ -19,13 +22,44 @@ The default setup is now **Outlook / Microsoft 365** through Microsoft Graph.
 - GitHub repo and GitHub Actions
 - Streamlit Community Cloud
 - Supabase free tier
-- Microsoft Graph API for Outlook mail
+- Outlook IMAP with an email password or app password
 - Optional Groq free tier and Gemini free tier for AI summaries
+
+## AI Features
+
+- Email summary and task generation.
+- Multiple tasks from one email when needed.
+- Priority, priority reason, and urgency detection.
+- Intent, category, client/contact, sentiment, and escalation risk detection.
+- Real deadline text plus optional `deadline_date` when the model can infer it.
+- Attachment awareness for PDF, Excel, CSV, Word, and text files.
+- Suggested reply draft based on the email, attachments, and previous sent replies.
+- Lightweight RAG memory from your sent emails in `ai_memories`.
+- Daily AI briefing that tells you what to do first.
+
+## Attachment Support
+
+The simple Outlook IMAP provider extracts readable text from:
+
+```text
+PDF: .pdf
+Excel: .xlsx
+CSV: .csv
+Word: .docx
+Text: .txt, .md, .log
+```
+
+Attachments are not stored as files. Only extracted text and attachment names are stored in Supabase.
+
+## RAG / Reply Pattern Learning
+
+When the app sees sent emails, it saves short reply examples in `ai_memories`.
+When a new inbound email arrives from the same domain, those examples are added to the AI prompt so suggested replies better match the user's tone and pattern.
 
 ## Files
 
 - `app.py` - Streamlit dashboard.
-- `email_processor.py` - Outlook/Gmail automation entrypoint.
+- `email_processor.py` - Outlook IMAP, Microsoft Graph, or Gmail automation entrypoint.
 - `ai_utils.py` - Groq/Gemini enrichment with rule fallback.
 - `task_manager.py` - task lifecycle, completion, follow-up logic.
 - `supabase_client.py` - Supabase client and state helpers.
@@ -34,44 +68,63 @@ The default setup is now **Outlook / Microsoft 365** through Microsoft Graph.
 
 ## Required Secrets
 
-### GitHub Actions Secrets
-
-Add these in GitHub repo -> Settings -> Secrets and variables -> Actions:
-
-```text
-EMAIL_PROVIDER=outlook
-SUPABASE_URL=your Supabase project URL
-SUPABASE_SERVICE_ROLE_KEY=your Supabase service role key
-MICROSOFT_TENANT_ID=your Microsoft tenant ID
-MICROSOFT_CLIENT_ID=your Microsoft app client ID
-MICROSOFT_CLIENT_SECRET=your Microsoft app client secret
-MICROSOFT_MAILBOX_USER=user@clientdomain.com
-```
-
-Optional AI secrets:
-
-```text
-GROQ_API_KEY=your Groq key
-GEMINI_API_KEY=your Gemini key
-```
-
-Optional behavior:
-
-```text
-FOLLOW_UP_AFTER_HOURS=24
-OUTLOOK_MAX_PAGES=4
-```
-
 ### Streamlit Secrets
 
-Add these in Streamlit Cloud -> App -> Settings -> Secrets:
+Paste this in Streamlit Cloud -> App -> Settings -> Secrets:
 
 ```toml
+EMAIL_PROVIDER = "simple_outlook"
 SUPABASE_URL = "https://your-project.supabase.co"
-SUPABASE_ANON_KEY = "your Supabase anon key"
+SUPABASE_SERVICE_ROLE_KEY = "your Supabase service role key"
+EMAIL_ADDRESS = "user@outlook.com"
+EMAIL_PASSWORD = "your email password or app password"
+GEMINI_API_KEY = "your Gemini key"
+GROQ_API_KEY = "your Groq key"
 ```
 
-Do not put `SUPABASE_SERVICE_ROLE_KEY` in Streamlit.
+Optional:
+
+```toml
+EMAIL_IMAP_HOST = "outlook.office365.com"
+EMAIL_IMAP_PORT = "993"
+EMAIL_SENT_FOLDER = "Sent Items"
+FOLLOW_UP_AFTER_HOURS = "24"
+```
+
+This lets the dashboard load tasks and lets you manually sync email when you click **Sync email now**.
+
+### GitHub Actions Secrets For 24/7
+
+For automatic background sync every 10 minutes, add the same core values in GitHub repo -> Settings -> Secrets and variables -> Actions:
+
+```text
+EMAIL_PROVIDER=simple_outlook
+SUPABASE_URL
+SUPABASE_SERVICE_ROLE_KEY
+EMAIL_ADDRESS
+EMAIL_PASSWORD
+GEMINI_API_KEY
+GROQ_API_KEY
+```
+
+Optional GitHub Actions secrets:
+
+```text
+EMAIL_IMAP_HOST=outlook.office365.com
+EMAIL_IMAP_PORT=993
+EMAIL_SENT_FOLDER=Sent Items
+EMAIL_INBOX_LIMIT=60
+EMAIL_SENT_LIMIT=60
+FOLLOW_UP_AFTER_HOURS=24
+```
+
+Streamlit secrets and GitHub Actions secrets are separate. For full 24/7 behavior, paste the simple email/Supabase/AI secrets in both places.
+
+### Dashboard-Only Alternative
+
+If you do not want Streamlit to access the mailbox, use only `SUPABASE_URL` and `SUPABASE_ANON_KEY` in Streamlit and put email secrets in GitHub Actions.
+
+For your requested simple setup with manual sync plus 24/7 sync, use both the Streamlit secrets block and the GitHub Actions secrets block.
 
 ## 1. Supabase Setup
 
@@ -85,34 +138,23 @@ Do not put `SUPABASE_SERVICE_ROLE_KEY` in Streamlit.
    - anon public key -> `SUPABASE_ANON_KEY`
    - service_role key -> `SUPABASE_SERVICE_ROLE_KEY`
 
-The service role key is only for GitHub Actions because the automation writes emails and tasks.
+For the simplest one-user setup, the service role key is used by Streamlit manual sync and GitHub Actions scheduled sync because both write emails and tasks.
 
-## 2. Microsoft Outlook Setup
+## 2. Simple Outlook Setup
 
-Use this when the client uses Outlook or Microsoft 365.
+Use this when the client has one Outlook/Hotmail/Microsoft mailbox.
 
-1. Go to Microsoft Entra admin center or Azure Portal.
-2. Open App registrations.
-3. Click New registration.
-4. Name it `Email Task Tracker`.
-5. Choose the account type for the client tenant.
-6. After creating it, copy:
-   - Application client ID -> `MICROSOFT_CLIENT_ID`
-   - Directory tenant ID -> `MICROSOFT_TENANT_ID`
-7. Open Certificates & secrets.
-8. Create a new client secret.
-9. Copy the secret value -> `MICROSOFT_CLIENT_SECRET`.
-10. Open API permissions.
-11. Add Microsoft Graph application permission:
-   - `Mail.Read`
-12. Click Grant admin consent.
-13. Set `MICROSOFT_MAILBOX_USER` to the mailbox address the app should read, for example:
+1. Make sure IMAP is enabled for the mailbox.
+2. If the account has 2-step verification, create an app password.
+3. Put the mailbox in `EMAIL_ADDRESS`.
+4. Put the password or app password in `EMAIL_PASSWORD`.
+5. Keep the default IMAP host:
 
 ```text
-tasks@clientcompany.com
+outlook.office365.com
 ```
 
-Best production setup: use one shared/client mailbox and give the app access only to that mailbox.
+For some business Microsoft 365 tenants, password login may be blocked by policy. In that case use Microsoft Graph mode instead.
 
 ## 3. GitHub Deployment
 
@@ -127,16 +169,14 @@ git remote add origin https://github.com/YOUR_USERNAME/YOUR_REPO_NAME.git
 git push -u origin main
 ```
 
-Then add GitHub Actions secrets:
+Then add GitHub Actions secrets for 24/7 sync:
 
 ```text
 EMAIL_PROVIDER
 SUPABASE_URL
 SUPABASE_SERVICE_ROLE_KEY
-MICROSOFT_TENANT_ID
-MICROSOFT_CLIENT_ID
-MICROSOFT_CLIENT_SECRET
-MICROSOFT_MAILBOX_USER
+EMAIL_ADDRESS
+EMAIL_PASSWORD
 GROQ_API_KEY optional
 GEMINI_API_KEY optional
 ```
@@ -161,13 +201,30 @@ The workflow also runs every 10 minutes automatically.
 6. Open app settings and paste Streamlit secrets:
 
 ```toml
+EMAIL_PROVIDER = "simple_outlook"
 SUPABASE_URL = "https://your-project.supabase.co"
-SUPABASE_ANON_KEY = "your Supabase anon key"
+SUPABASE_SERVICE_ROLE_KEY = "your Supabase service role key"
+EMAIL_ADDRESS = "user@outlook.com"
+EMAIL_PASSWORD = "your email password or app password"
+GEMINI_API_KEY = "your Gemini key"
+GROQ_API_KEY = "your Groq key"
 ```
 
 7. Deploy.
 
-Streamlit is only the dashboard. It does not run the background email job.
+Click **Sync email now** in the app sidebar to read email immediately. GitHub Actions will keep syncing every 10 minutes in the background after you add the same secrets there.
+
+## Optional Microsoft Graph Mode
+
+If password login is blocked, use Microsoft Graph:
+
+```toml
+EMAIL_PROVIDER = "outlook"
+MICROSOFT_TENANT_ID = "tenant id"
+MICROSOFT_CLIENT_ID = "client id"
+MICROSOFT_CLIENT_SECRET = "client secret"
+EMAIL_ADDRESS = "user@clientdomain.com"
+```
 
 ## Optional Gmail Mode
 
@@ -210,16 +267,15 @@ python email_processor.py
 For each new client:
 
 1. Create or reuse a Supabase project.
-2. Register a Microsoft Entra app in that client tenant.
-3. Add the client mailbox email to `MICROSOFT_MAILBOX_USER`.
-4. Paste the client-specific secrets into GitHub Actions.
-5. Paste only Supabase URL and anon key into Streamlit.
-6. Run the workflow once and verify tasks appear.
+2. Add the client mailbox email to `EMAIL_ADDRESS`.
+3. Add the client password or app password to `EMAIL_PASSWORD`.
+4. Paste the same client-specific secrets into Streamlit and GitHub Actions.
+5. Run the workflow once and verify tasks appear.
 
 ## Production Notes
 
 - AI keys are optional. Without them, the app still creates tasks using rules.
 - Completed tasks are hidden from the main list and retained in history.
-- Outlook conversations use Microsoft Graph `conversationId` as the task thread ID.
+- Simple Outlook mode uses IMAP message headers as the task thread ID.
 - `app_state` stores the last Outlook/Gmail sync position to avoid reprocessing.
-- Keep GitHub Actions secrets private. Never expose Microsoft client secrets or Supabase service role keys in Streamlit.
+- For business tenants that block password login, switch to Microsoft Graph mode.

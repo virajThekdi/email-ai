@@ -15,7 +15,7 @@ def _required_env(name: str) -> str:
     return value
 
 
-def _setting(name: str) -> str | None:
+def get_setting(name: str) -> str | None:
     value = os.getenv(name)
     if value:
         return value
@@ -27,10 +27,16 @@ def _setting(name: str) -> str | None:
         return None
 
 
+def _setting(name: str) -> str | None:
+    return get_setting(name)
+
+
 @lru_cache(maxsize=1)
 def get_supabase() -> Client:
     url = _normalize_supabase_url(_required_env("SUPABASE_URL"))
-    key = _setting("SUPABASE_SERVICE_ROLE_KEY") or _required_env("SUPABASE_ANON_KEY")
+    key = _setting("SUPABASE_SERVICE_ROLE_KEY") or _setting("SUPABASE_ANON_KEY")
+    if not key:
+        raise MissingConfigError("Missing required environment variable: SUPABASE_ANON_KEY or SUPABASE_SERVICE_ROLE_KEY")
     return create_client(url, key)
 
 

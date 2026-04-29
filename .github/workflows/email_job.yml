@@ -22,9 +22,16 @@ jobs:
 
       - name: Process email into tasks
         env:
-          EMAIL_PROVIDER: ${{ secrets.EMAIL_PROVIDER || 'outlook' }}
+          EMAIL_PROVIDER: ${{ secrets.EMAIL_PROVIDER || 'simple_outlook' }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          EMAIL_ADDRESS: ${{ secrets.EMAIL_ADDRESS }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          EMAIL_IMAP_HOST: ${{ secrets.EMAIL_IMAP_HOST }}
+          EMAIL_IMAP_PORT: ${{ secrets.EMAIL_IMAP_PORT }}
+          EMAIL_SENT_FOLDER: ${{ secrets.EMAIL_SENT_FOLDER }}
+          EMAIL_INBOX_LIMIT: ${{ secrets.EMAIL_INBOX_LIMIT }}
+          EMAIL_SENT_LIMIT: ${{ secrets.EMAIL_SENT_LIMIT }}
           MICROSOFT_TENANT_ID: ${{ secrets.MICROSOFT_TENANT_ID }}
           MICROSOFT_CLIENT_ID: ${{ secrets.MICROSOFT_CLIENT_ID }}
           MICROSOFT_CLIENT_SECRET: ${{ secrets.MICROSOFT_CLIENT_SECRET }}
@@ -32,5 +39,5 @@ jobs:
           GMAIL_TOKEN_JSON: ${{ secrets.GMAIL_TOKEN_JSON }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          FOLLOW_UP_AFTER_HOURS: "24"
+          FOLLOW_UP_AFTER_HOURS: ${{ secrets.FOLLOW_UP_AFTER_HOURS || '24' }}
         run: python email_processor.py

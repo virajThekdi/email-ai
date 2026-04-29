@@ -1,6 +1,7 @@
 import streamlit as st
 from postgrest.exceptions import APIError
 
+from ai_utils import summarize_board
 from supabase_client import MissingConfigError
 from task_manager import get_dashboard_tasks, mark_task_completed
 
@@ -44,6 +45,37 @@ def render_task(task: dict, key_prefix: str) -> None:
             meta.append(f"Next: {task['next_action']}")
         if meta:
             st.write(" | ".join(meta))
+        detail_cols = st.columns(3)
+        if task.get("category"):
+            detail_cols[0].caption(f"Category: {task['category']}")
+        if task.get("intent"):
+            detail_cols[1].caption(f"Intent: {task['intent']}")
+        if task.get("escalation_risk"):
+            detail_cols[2].caption(f"Risk: {task['escalation_risk']}")
+        if task.get("client_name") or task.get("contact_name"):
+            st.caption(f"Client/contact: {task.get('client_name') or '-'} / {task.get('contact_name') or '-'}")
+        if task.get("priority_reason"):
+            st.caption(f"Why this priority: {task['priority_reason']}")
+        if task.get("attachment_summary"):
+            st.info(task["attachment_summary"])
+        if task.get("suggested_reply"):
+            with st.expander("Suggested reply"):
+                st.write(task["suggested_reply"])
+
+
+st.sidebar.header("Sync")
+if st.sidebar.button("Sync email now", use_container_width=True):
+    try:
+        with st.spinner("Reading mailbox and updating tasks..."):
+            from email_processor import run as run_email_processor
+
+            run_email_processor()
+        st.success("Email sync finished.")
+        st.rerun()
+    except Exception as exc:
+        st.error("Email sync failed. Check your Streamlit secrets and mailbox password/app password.")
+        with st.expander("Technical detail"):
+            st.code(str(exc))
 
 
 try:
@@ -84,6 +116,10 @@ if next_task:
         st.caption(next_task.get("summary") or "")
 else:
     st.success("No active tasks. You are caught up.")
+
+with st.container(border=True):
+    st.subheader("AI Briefing")
+    st.write(summarize_board(pending + follow_ups))
 
 left, right = st.columns([0.64, 0.36], gap="large")
 
