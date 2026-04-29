@@ -19,6 +19,7 @@ from googleapiclient.discovery import build
 from attachment_utils import extract_attachments_from_message
 from ai_utils import analyze_email, is_actionable_email, rule_based_analysis, should_use_ai, strip_email_noise
 from production_logic import analyze_production_email
+from rfq_manager import process_rfq_reply
 from supabase_client import get_setting, get_state, set_state
 from task_manager import (
     complete_tasks_for_sent_replies,
@@ -57,6 +58,7 @@ def _process_emails(emails: list[dict]) -> tuple[int, int]:
         if inserted and email["is_sent"]:
             store_reply_memory(email)
         if inserted and not email["is_sent"]:
+            process_rfq_reply(email)
             production_analysis = analyze_production_email(
                 email["subject"],
                 email["body"] + "\n" + email.get("attachment_text", ""),

@@ -29,6 +29,8 @@ jobs:
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
           EMAIL_IMAP_HOST: ${{ secrets.EMAIL_IMAP_HOST }}
           EMAIL_IMAP_PORT: ${{ secrets.EMAIL_IMAP_PORT }}
+          EMAIL_SMTP_HOST: ${{ secrets.EMAIL_SMTP_HOST }}
+          EMAIL_SMTP_PORT: ${{ secrets.EMAIL_SMTP_PORT }}
           EMAIL_SENT_FOLDER: ${{ secrets.EMAIL_SENT_FOLDER }}
           EMAIL_INBOX_LIMIT: ${{ secrets.EMAIL_INBOX_LIMIT }}
           EMAIL_SENT_LIMIT: ${{ secrets.EMAIL_SENT_LIMIT }}

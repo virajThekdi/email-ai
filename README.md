@@ -87,6 +87,8 @@ Optional:
 ```toml
 EMAIL_IMAP_HOST = "outlook.office365.com"
 EMAIL_IMAP_PORT = "993"
+EMAIL_SMTP_HOST = "smtp.gmail.com"
+EMAIL_SMTP_PORT = "587"
 EMAIL_SENT_FOLDER = "Sent Items"
 FOLLOW_UP_AFTER_HOURS = "24"
 AI_MAX_CALLS_PER_RUN = "8"

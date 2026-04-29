@@ -2,6 +2,7 @@ import streamlit as st
 from postgrest.exceptions import APIError
 
 from ai_utils import summarize_board
+from rfq_manager import create_rfq, get_rfq_detail, list_rfqs, rfq_status_rows, send_rfq
 from supabase_client import MissingConfigError, get_setting
 from task_manager import get_dashboard_tasks, mark_task_completed
 
@@ -123,61 +124,105 @@ follow_ups = data["follow_ups"]
 completed = data["completed"]
 next_task = pending[0] if pending else (follow_ups[0] if follow_ups else None)
 
-st.title("Email Task Tracker")
-st.caption("Intelligent Action Board")
+st.title("Production Control Panel")
+st.caption("Email-driven RFQ, order, production, and follow-up board")
 
-blocking = [task for task in pending + follow_ups if task.get("is_blocking")]
-rfqs = [task for task in pending if task.get("is_rfq")]
-orders = [task for task in pending if task.get("is_order")]
+board_tab, rfq_tab, history_tab = st.tabs(["Action Board", "RFQ Control", "Completed"])
 
-metric_cols = st.columns(5)
-metric_cols[0].metric("Pending", len(pending))
-metric_cols[1].metric("RFQs", len(rfqs))
-metric_cols[2].metric("Orders", len(orders))
-metric_cols[3].metric("Blocking", len(blocking))
-metric_cols[4].metric("Follow-ups", len(follow_ups))
+with board_tab:
 
-st.divider()
+    blocking = [task for task in pending + follow_ups if task.get("is_blocking")]
+    rfqs = [task for task in pending if task.get("is_rfq")]
+    orders = [task for task in pending if task.get("is_order")]
 
-if next_task:
+    metric_cols = st.columns(5)
+    metric_cols[0].metric("Pending", len(pending))
+    metric_cols[1].metric("RFQs", len(rfqs))
+    metric_cols[2].metric("Orders", len(orders))
+    metric_cols[3].metric("Blocking", len(blocking))
+    metric_cols[4].metric("Follow-ups", len(follow_ups))
+
+    st.divider()
+
+    if next_task:
+        with st.container(border=True):
+            st.subheader("Next Best Production Task")
+            st.write(next_task.get("next_action") or next_task.get("task_text"))
+            st.caption(next_task.get("summary") or "")
+    else:
+        st.success("No active tasks. You are caught up.")
+
     with st.container(border=True):
-        st.subheader("Next Best Production Task")
-        st.write(next_task.get("next_action") or next_task.get("task_text"))
-        st.caption(next_task.get("summary") or "")
-else:
-    st.success("No active tasks. You are caught up.")
+        st.subheader("AI Briefing")
+        st.write(summarize_board(pending + follow_ups))
 
-with st.container(border=True):
-    st.subheader("AI Briefing")
-    st.write(summarize_board(pending + follow_ups))
+    left, right = st.columns([0.64, 0.36], gap="large")
 
-left, right = st.columns([0.64, 0.36], gap="large")
+    with left:
+        st.subheader("Production / RFQ Tasks")
+        if not pending:
+            st.info("No pending email tasks.")
+        for task in pending:
+            render_task(task, "pending")
 
-with left:
-    st.subheader("Production / RFQ Tasks")
-    if not pending:
-        st.info("No pending email tasks.")
-    for task in pending:
-        render_task(task, "pending")
+    with right:
+        st.subheader("Blocking")
+        if not blocking:
+            st.success("No blocking production/RFQ items.")
+        for task in blocking[:8]:
+            render_task(task, "blocking")
 
-with right:
-    st.subheader("Blocking")
-    if not blocking:
-        st.success("No blocking production/RFQ items.")
-    for task in blocking[:8]:
-        render_task(task, "blocking")
+        st.subheader("Follow-Ups")
+        if not follow_ups:
+            st.info("No follow-ups needed.")
+        for task in follow_ups:
+            render_task(task, "followup")
 
-    st.subheader("Follow-Ups")
-    if not follow_ups:
-        st.info("No follow-ups needed.")
-    for task in follow_ups:
-        render_task(task, "followup")
+with rfq_tab:
+    st.subheader("Create RFQ")
+    with st.form("create-rfq"):
+        title = st.text_input("RFQ title")
+        due_date = st.date_input("Due date", value=None)
+        vendors = st.text_area("Vendor emails", placeholder="vendor1@example.com\nvendor2@example.com")
+        items = st.text_area("Items/specifications", placeholder="10mm toughened glass - 500 pcs\nLaminated glass - 20 sheets")
+        notes = st.text_area("Notes")
+        submitted = st.form_submit_button("Create RFQ")
+    if submitted and title and vendors and items:
+        rfq_id = create_rfq(title, due_date.isoformat() if due_date else None, notes, vendors, items)
+        st.success(f"Created RFQ-{rfq_id:05d}")
+        st.rerun()
 
-st.subheader("Completed")
-if not completed:
-    st.caption("Completed tasks will appear here.")
-else:
-    for task in completed[:20]:
-        with st.expander(task.get("task_text", "Completed task")):
-            st.caption(task.get("summary") or "")
-            st.write(f"Completed: {task.get('completed_at') or 'unknown'}")
+    st.subheader("RFQ Status")
+    rows = rfq_status_rows()
+    if rows:
+        st.dataframe(rows, use_container_width=True, hide_index=True)
+    else:
+        st.info("No RFQs created yet.")
+
+    for rfq in list_rfqs():
+        with st.expander(f"{rfq.get('rfq_code') or rfq['id']} - {rfq['title']}"):
+            detail = get_rfq_detail(rfq["id"])
+            cols = st.columns(3)
+            cols[0].metric("Vendors", len(detail["vendors"]))
+            cols[1].metric("Responses", len(detail["responses"]))
+            cols[2].metric("Status", rfq["status"])
+            if st.button("Send RFQ emails", key=f"send-rfq-{rfq['id']}"):
+                sent_count = send_rfq(rfq["id"])
+                st.success(f"Sent {sent_count} RFQ email(s).")
+                st.rerun()
+            st.write("Items")
+            st.dataframe(detail["items"], use_container_width=True, hide_index=True)
+            st.write("Vendors")
+            st.dataframe(detail["vendors"], use_container_width=True, hide_index=True)
+            st.write("Responses")
+            st.dataframe(detail["responses"], use_container_width=True, hide_index=True)
+
+with history_tab:
+    st.subheader("Completed")
+    if not completed:
+        st.caption("Completed tasks will appear here.")
+    else:
+        for task in completed[:20]:
+            with st.expander(task.get("task_text", "Completed task")):
+                st.caption(task.get("summary") or "")
+                st.write(f"Completed: {task.get('completed_at') or 'unknown'}")
