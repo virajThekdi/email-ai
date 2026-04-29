@@ -15,6 +15,45 @@ PRIORITY_KEYWORDS = {
     "medium": ("soon", "tomorrow", "this week", "follow up", "reminder", "please"),
 }
 
+ACTION_KEYWORDS = (
+    "please",
+    "send",
+    "share",
+    "confirm",
+    "approve",
+    "review",
+    "quote",
+    "quotation",
+    "invoice",
+    "payment",
+    "call",
+    "meeting",
+    "schedule",
+    "deadline",
+    "asap",
+    "urgent",
+    "need",
+    "can you",
+    "could you",
+    "request",
+    "follow up",
+)
+
+NOISE_KEYWORDS = (
+    "unsubscribe",
+    "newsletter",
+    "promotion",
+    "sale ends",
+    "verify your login",
+    "security alert",
+    "password reset",
+    "digest",
+    "no-reply",
+    "noreply",
+    "do not reply",
+    "marketing",
+)
+
 
 def strip_email_noise(body: str, max_chars: int = 4500) -> str:
     text = re.sub(r"\r\n?", "\n", body or "")
@@ -42,6 +81,38 @@ def rule_priority(subject: str, body: str, timestamp: datetime | None = None) ->
     return "low"
 
 
+def is_actionable_email(subject: str, body: str, sender: str, attachment_names: list[str] | None = None) -> tuple[bool, str]:
+    text = strip_email_noise(f"{subject}\n{body}", 2500).lower()
+    sender_lower = (sender or "").lower()
+    attachment_names = attachment_names or []
+
+    if any(word in sender_lower for word in ("no-reply", "noreply", "donotreply", "mailer-daemon")):
+        return False, "Automated sender"
+    if any(word in text for word in NOISE_KEYWORDS) and not any(word in text for word in ACTION_KEYWORDS):
+        return False, "Marketing or automated email"
+    if len(text) < 30 and not attachment_names:
+        return False, "Too little actionable content"
+    if any(word in text for word in ACTION_KEYWORDS):
+        return True, "Action keyword detected"
+    if attachment_names and any(name.lower().endswith((".pdf", ".xlsx", ".csv", ".docx")) for name in attachment_names):
+        return True, "Business attachment detected"
+    if "?" in text and len(text) > 80:
+        return True, "Question detected"
+    return False, "No clear action detected"
+
+
+def should_use_ai(subject: str, body: str, sender: str, attachment_text: str = "", attachment_names: list[str] | None = None) -> bool:
+    combined = f"{subject}\n{body}\n{attachment_text}"
+    priority = rule_priority(subject, combined)
+    if priority in {"high", "medium"}:
+        return True
+    if attachment_text:
+        return True
+    if len(strip_email_noise(combined, 5000)) > 900:
+        return True
+    return False
+
+
 def extract_deadline(subject: str, body: str) -> str | None:
     text = f"{subject}\n{body}".lower()
     if "today" in text:
@@ -52,7 +123,7 @@ def extract_deadline(subject: str, body: str) -> str | None:
     return match.group(1) if match else None
 
 
-def _fallback_task(
+def rule_based_analysis(
     subject: str,
     body: str,
     sender: str,
@@ -84,6 +155,17 @@ def _fallback_task(
         "attachment_summary": _fallback_attachment_summary(attachment_names, attachment_text),
         "tasks": [],
     }
+
+
+def _fallback_task(
+    subject: str,
+    body: str,
+    sender: str,
+    timestamp: datetime | None,
+    attachment_text: str = "",
+    attachment_names: list[str] | None = None,
+) -> dict[str, Any]:
+    return rule_based_analysis(subject, body, sender, timestamp, attachment_text, attachment_names)
 
 
 def analyze_email(
@@ -129,27 +211,13 @@ def summarize_board(tasks: list[dict[str, Any]]) -> str:
     if not tasks:
         return "No active tasks right now."
     top = tasks[:8]
-    prompt = (
-        "Write a concise daily action briefing. Tell the user what to do first and why. "
-        "Keep it under 55 words.\n\n"
-        + json.dumps(
-            [
-                {
-                    "task": task.get("task_text"),
-                    "priority": task.get("priority"),
-                    "deadline": task.get("deadline") or task.get("deadline_date"),
-                    "category": task.get("category"),
-                    "risk": task.get("escalation_risk"),
-                }
-                for task in top
-            ]
-        )
-    )
-    response = _call_groq(prompt) or _call_gemini(prompt)
-    if response and response.get("summary"):
-        return str(response["summary"])
     first = top[0]
-    return f"Do this first: {first.get('task_text')}."
+    high_count = len([task for task in tasks if task.get("priority") == "high"])
+    risky = len([task for task in tasks if task.get("escalation_risk") == "high"])
+    prefix = f"{high_count} high-priority task(s). " if high_count else ""
+    risk = f"{risky} escalation risk(s). " if risky else ""
+    reason = first.get("priority_reason") or first.get("summary") or "it is the highest-ranked active task"
+    return f"{prefix}{risk}Do this first: {first.get('task_text')}. Reason: {reason}"
 
 
 def _normalize_priority(value: str) -> str:
@@ -201,20 +269,23 @@ def _call_groq(prompt: str) -> dict[str, Any] | None:
     if not api_key:
         return None
     model = get_setting("GROQ_MODEL") or "llama-3.1-8b-instant"
-    response = requests.post(
-        "https://api.groq.com/openai/v1/chat/completions",
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        json={
-            "model": model,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.1,
-            "max_tokens": 260,
-            "response_format": {"type": "json_object"},
-        },
-        timeout=20,
-    )
-    response.raise_for_status()
-    return _parse_json(response.json()["choices"][0]["message"]["content"])
+    try:
+        response = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.1,
+                "max_tokens": 260,
+                "response_format": {"type": "json_object"},
+            },
+            timeout=20,
+        )
+        response.raise_for_status()
+        return _parse_json(response.json()["choices"][0]["message"]["content"])
+    except requests.RequestException:
+        return None
 
 
 def _call_gemini(prompt: str) -> dict[str, Any] | None:
@@ -222,12 +293,15 @@ def _call_gemini(prompt: str) -> dict[str, Any] | None:
     if not api_key:
         return None
     model = get_setting("GEMINI_MODEL") or "gemini-1.5-flash"
-    response = requests.post(
-        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-        params={"key": api_key},
-        json={"contents": [{"parts": [{"text": prompt}]}]},
-        timeout=20,
-    )
-    response.raise_for_status()
-    parts = response.json()["candidates"][0]["content"]["parts"]
-    return _parse_json(parts[0]["text"])
+    try:
+        response = requests.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+            params={"key": api_key},
+            json={"contents": [{"parts": [{"text": prompt}]}]},
+            timeout=20,
+        )
+        response.raise_for_status()
+        parts = response.json()["candidates"][0]["content"]["parts"]
+        return _parse_json(parts[0]["text"])
+    except (requests.RequestException, KeyError, IndexError):
+        return None

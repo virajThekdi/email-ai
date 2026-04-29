@@ -89,6 +89,7 @@ EMAIL_IMAP_HOST = "outlook.office365.com"
 EMAIL_IMAP_PORT = "993"
 EMAIL_SENT_FOLDER = "Sent Items"
 FOLLOW_UP_AFTER_HOURS = "24"
+AI_MAX_CALLS_PER_RUN = "8"
 ```
 
 This lets the dashboard load tasks and lets you manually sync email when you click **Sync email now**.
@@ -116,6 +117,7 @@ EMAIL_SENT_FOLDER=Sent Items
 EMAIL_INBOX_LIMIT=60
 EMAIL_SENT_LIMIT=60
 FOLLOW_UP_AFTER_HOURS=24
+AI_MAX_CALLS_PER_RUN=8
 ```
 
 Streamlit secrets and GitHub Actions secrets are separate. For full 24/7 behavior, paste the simple email/Supabase/AI secrets in both places.
@@ -275,6 +277,7 @@ For each new client:
 ## Production Notes
 
 - AI keys are optional. Without them, the app still creates tasks using rules.
+- The processor filters automated/marketing emails before AI and caps AI calls with `AI_MAX_CALLS_PER_RUN`.
 - Completed tasks are hidden from the main list and retained in history.
 - Simple Outlook mode uses IMAP message headers as the task thread ID.
 - `app_state` stores the last Outlook/Gmail sync position to avoid reprocessing.

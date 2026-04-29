@@ -17,7 +17,7 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
 from attachment_utils import extract_attachments_from_message
-from ai_utils import analyze_email, strip_email_noise
+from ai_utils import analyze_email, is_actionable_email, rule_based_analysis, should_use_ai, strip_email_noise
 from supabase_client import get_setting, get_state, set_state
 from task_manager import (
     complete_tasks_for_sent_replies,
@@ -48,22 +48,50 @@ def run() -> None:
 def _process_emails(emails: list[dict]) -> tuple[int, int]:
     created_candidates = 0
     max_position = 0
+    ai_calls_used = 0
+    ai_call_limit = int(get_setting("AI_MAX_CALLS_PER_RUN") or "8")
     for email in emails:
         max_position = max(max_position, email.get("sync_position", 0))
         inserted = store_email(email)
         if inserted and email["is_sent"]:
             store_reply_memory(email)
         if inserted and not email["is_sent"]:
-            reply_context = get_reply_context(email["sender"], email["subject"])
-            analysis = analyze_email(
+            actionable, _reason = is_actionable_email(
                 email["subject"],
                 email["body"],
                 email["sender"],
-                email["timestamp"],
-                attachment_text=email.get("attachment_text", ""),
-                attachment_names=email.get("attachment_names") or [],
-                reply_context=reply_context,
+                email.get("attachment_names") or [],
             )
+            if not actionable:
+                continue
+            use_ai = should_use_ai(
+                email["subject"],
+                email["body"],
+                email["sender"],
+                email.get("attachment_text", ""),
+                email.get("attachment_names") or [],
+            )
+            if use_ai and ai_calls_used < ai_call_limit:
+                reply_context = get_reply_context(email["sender"], email["subject"])
+                analysis = analyze_email(
+                    email["subject"],
+                    email["body"],
+                    email["sender"],
+                    email["timestamp"],
+                    attachment_text=email.get("attachment_text", ""),
+                    attachment_names=email.get("attachment_names") or [],
+                    reply_context=reply_context,
+                )
+                ai_calls_used += 1
+            else:
+                analysis = rule_based_analysis(
+                    email["subject"],
+                    email["body"],
+                    email["sender"],
+                    email["timestamp"],
+                    attachment_text=email.get("attachment_text", ""),
+                    attachment_names=email.get("attachment_names") or [],
+                )
             create_task_from_email(email, analysis)
             created_candidates += 1
     return created_candidates, max_position

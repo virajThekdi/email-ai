@@ -79,8 +79,10 @@ if st.sidebar.button("Sync email now", use_container_width=True):
                 "Supabase blocked writes with row-level security. Run the latest `supabase_schema.sql` in "
                 "Supabase SQL Editor, or add `SUPABASE_SERVICE_ROLE_KEY` to Streamlit secrets."
             )
-        elif not get_setting("SUPABASE_SERVICE_ROLE_KEY"):
+        elif "supabase" in str(exc).lower() and not get_setting("SUPABASE_SERVICE_ROLE_KEY"):
             st.warning("Manual sync writes to Supabase. Add `SUPABASE_SERVICE_ROLE_KEY` to Streamlit secrets.")
+        elif "too many requests" in str(exc).lower() or "429" in str(exc):
+            st.warning("An AI provider rate-limited the request. The app will now fall back to the other AI provider or rules.")
         with st.expander("Technical detail"):
             st.code(str(exc))
 
